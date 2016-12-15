@@ -14,23 +14,131 @@ output:
 ---
 
 
-* Name: 
-* Project title:
-* Write-up on RPubs: <http://rpubs.com/rudeboybert/Tree_Growth_Differences>
-* Abstract: Hello World!
+* Name: Katherine Hobbs
+* Project title: Smoking Prevalence, Regulation, and Outcomes Across the United States
+* Write-up on RPubs: <http://rpubs.com/khobbs/Hobbs_Abstract>
+* Abstract: 
 
+The anti-tobacco campaign in the mid to late 20th century is widely considered one of the most successful public health campaigns in American history. Even so, according to the CDC, smoking remains the number one cause of preventable death and disease in the United States, causing roughly 480,000 deaths per year. An exploration of 2013 smoking and demographic data allows one to investigate the relationships between smoking prevelance, regulation, and outcomes in the United States and address the following questions: How do smoking trends in the United States vary by region? What demographic variables correlate most strongly with lung cancer death rates? Do high cigarette taxes correlate with lower smoking or lung cancer death rates? Ultimately, this investigation aims to illuminate the long-term legacy of the anti-tobacco campaign in the United States. 
 
 ```{r, echo=FALSE, message=FALSE}
-#
-# Include code for one plot here
-#
-library(ggplot2)
+
+library(tidyverse)
+library(USAboundaries)
+library(maptools)
+library(sp)
+library(broom)
+library(leaflet)
 library(dplyr)
-small <- sample_n(diamonds, 2000) 
-ggplot(data=diamonds, aes(x=carat,y=price,colour=cut)) +
-  geom_point() +
-  scale_y_log10() + 
-  facet_wrap(~cut) +
-  ggtitle("Replace this plot with one of your own")
+library(ggplot2)
+library(rgdal)
+library(readr)
+library(forcats)
+library(knitr)
+library(dtplyr)
+
+#Load Data Sets
+
+Lung_Cancer <- read_csv("Lung Cancer Social Explorer.csv")
+
+Taxes <- read_csv("Tax Data.csv")
+
+Tobacco_Use <- read_csv("Tobacco Use.csv")
+
+State_Income <- read_csv("Income.csv")
+
+#Clean Data Sets
+
+Tobacco_Use <- Tobacco_Use %>% 
+  select(`Location Description`,`Data Value`, Gender) %>% 
+  spread("Gender", "Data Value")
+
+Taxes <- Taxes %>% 
+  select(`Location Description`,`Sub-Measure`,`Data Value`) %>% 
+  spread("Sub-Measure", "Data Value", fill= NA)
+
+#Rename variables
+
+Lung_Cancer <- Lung_Cancer %>% 
+  rename(LC_Death_Rate = SE_T038_001) %>% 
+  rename(LC_Deaths = SE_NV121_001) %>% 
+  rename(State=Geo_NAME)
+
+Lung_Cancer <- Lung_Cancer %>% 
+  select(State, LC_Deaths, LC_Death_Rate)
+
+State_Income <- State_Income %>% 
+  rename(population=SE_T001_001) %>% 
+  rename(median_hs_income=SE_T057_001) %>% 
+  rename(State=Geo_NAME)
+
+State_Income <- State_Income %>% 
+  select(State, population, median_hs_income)
+
+Taxes <- Taxes %>% 
+  rename(State=`Location Description`) %>% 
+  rename(Avg_Pack_Cost=`Average Cost per pack`) %>% 
+  rename(Consumption=`Cigarette Consumption (Pack Sales Per Capita)`) %>% 
+  rename(Total_Tax_percent=`Federal and State tax as a Percentage of Retail Price`) %>% 
+  rename(Total_Tax_amount=`Federal and State Tax per pack`) %>% 
+  rename(State_Tax_amount=`State Tax per pack`)
+
+Taxes <- Taxes %>% 
+  select(State, Avg_Pack_Cost, Consumption, Total_Tax_percent, Total_Tax_amount)
+  
+Tobacco_Use <- Tobacco_Use %>% 
+  rename(State=`Location Description`) %>% 
+  rename(Current_Smokers_All=`Overall`) %>% 
+  rename(Current_Smokers_Male=`Male`) %>% 
+  rename(Current_Smokers_Female=`Female`)
+
+#Filter out territories and non-state entries
+
+Tobacco_Use <- Tobacco_Use %>% 
+  filter(State!="Puerto Rico") %>% 
+  filter(State!="Guam") %>% 
+  filter(State!="National Median (States and DC)") %>% 
+  filter(State!="District of Columbia")
+
+Taxes <- Taxes %>% 
+  filter(State!="District of Columbia")
+
+Lung_Cancer <- Lung_Cancer %>% 
+  filter(State!="Puerto Rico") %>% 
+  filter(State!="District of Columbia")
+
+#Join the Lung_Cancer, State_Income, Taxes, and Tobacco_Use datasets by State
+
+join_1 <- left_join(Taxes, Tobacco_Use, by="State")
+join_2 <- left_join(join_1, Lung_Cancer, by="State")
+Complete_State_Data <- left_join(join_2, State_Income, by="State")
+
+#Add number of smokers variable
+
+Complete_State_Data <- Complete_State_Data %>% 
+  mutate(Numb_Smokers=population*Current_Smokers_All)
+
+#Load US States Polygons Data
+us_states <- us_states() 
+us_states_tidy <- tidy(us_states, region="geoid")
+
+#Load US States Metadata
+us_states_data <- us_states@data
+
+#Join US States Metadata
+us_states_combined <- left_join(us_states_tidy, us_states_data, by=c("id"="geoid"))
+us_states_combined <- us_states_combined %>% 
+  filter(name!="Puerto Rico") %>% 
+  filter(name!="District of Columbia")
+
+#Join Combined States Data with Complete_State_Data
+Map_Data <- left_join(us_states_combined, Complete_State_Data, by=c("name"="State"))
+
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=LC_Death_Rate)) +
+  geom_polygon() +
+  scale_fill_gradient(low="white", high="darkblue") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50)) +
+  ggtitle("Lung Cancer Death Rate By State")
 ```
 

@@ -1,0 +1,557 @@
+---
+title: "MATH 216 Final Project"
+author: "Katherine Hobbs"
+output:
+  html_document:
+  toc: true
+toc_float: true
+collapsed: false
+smooth_scroll: false
+---
+##1. Introduction
+
+The link between cigarette smoking and lung cancer was first discovered by a British scientist named Sir Richard Doll in 1957 (BBC). In the five and a half decades since the announcement, public health organizations and government agencies have undertaken measures to fight the big tobacco industry and decrease smoking rates. In 1964, the acting Surgeon General of the United States released the first official report warning of the health risks of smoking (CDC). Shortly after in 1965, Congress enacted the Federal Cigarette Labeling and Advertising Act, which requried printed health warnings on cigarette packs and banned broadcasted cigarette advertising (CDC).
+
+The anti-tobacco campaign in the mid to late 20th century is widely considered one of the most successful public health campaigns in American history. That is, nearly half of living adults who ever smoked have quit. (CDC) Even so, according to the CDC, smoking remains the number one cause of preventable death and disease in the United States, causing roughly 480,000 deaths per year. According to estimates from the NIH, the United States spends an annual $13.4 billion on health care costs associated with lung cancer. Smoking conintues to place immense social, economic, and medical burdens on the United States and countries around the world. 
+
+This exploration of 2013 smoking and demographic data investigates the relationships between smoking prevelance, regulation, and outcomes in the United States and addresses the following questions: How do smoking trends in the United States vary by region? What demographic variables correlate most strongly with lung cancer death rates? Do high cigarette taxes correlate with lower smoking or lung cancer death rates? Ultimately, by answering these questions, this project aims to illuminate the long-term legacy of the anti-tobacco campaign in the United States. 
+
+
+##2. Methodology
+
+I aggregated four data sets, two from Social Explorer and two from the CDC, in order to unite data on state demographics, lung cancer deaths, smoking prevelance, and tobacco taxes for 2013. After selecting the variables I wished to examine, I merged the data with shapefiles data from Social Explorer and polygons data from the USAboundaries package in order to later represent relevant variables on chloropleths map of the United States. I began my analysis with an exploration of each variable, identifying summary statistics, the states with the top five and bottom five values, and regional variation of each variable. After noting key trends, I analysed the relationships between each variable and Lung Cancer Death rates by performing simple linear regressions, presenting correlation coefficients, and accessing the patterts of residuals. 
+
+```{r, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(USAboundaries)
+library(maptools)
+library(sp)
+library(broom)
+library(leaflet)
+library(dplyr)
+library(ggplot2)
+library(rgdal)
+library(readr)
+library(forcats)
+library(knitr)
+library(dtplyr)
+library(stargazer)
+```
+
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+#Load Data Sets
+
+Lung_Cancer <- read_csv("Lung Cancer Social Explorer.csv")
+
+Taxes <- read_csv("Tax Data.csv")
+
+Tobacco_Use <- read_csv("Tobacco Use.csv")
+
+State_Income <- read_csv("Income.csv")
+
+#Clean Data Sets
+
+Tobacco_Use <- Tobacco_Use %>% 
+  select(`Location Description`,`Data Value`, Gender) %>% 
+  spread("Gender", "Data Value")
+
+Taxes <- Taxes %>% 
+  select(`Location Description`,`Sub-Measure`,`Data Value`) %>% 
+  spread("Sub-Measure", "Data Value", fill= NA)
+
+#Rename variables
+
+Lung_Cancer <- Lung_Cancer %>% 
+  rename(LC_Death_Rate = SE_T038_001) %>% 
+  rename(LC_Deaths = SE_NV121_001) %>% 
+  rename(State=Geo_NAME)
+
+Lung_Cancer <- Lung_Cancer %>% 
+  select(State, LC_Deaths, LC_Death_Rate)
+
+State_Income <- State_Income %>% 
+  rename(population=SE_T001_001) %>% 
+  rename(median_hs_income=SE_T057_001) %>% 
+  rename(State=Geo_NAME)
+
+State_Income <- State_Income %>% 
+  select(State, population, median_hs_income)
+
+Taxes <- Taxes %>% 
+  rename(State=`Location Description`) %>% 
+  rename(Avg_Pack_Cost=`Average Cost per pack`) %>% 
+  rename(Consumption=`Cigarette Consumption (Pack Sales Per Capita)`) %>% 
+  rename(Total_Tax_percent=`Federal and State tax as a Percentage of Retail Price`) %>% 
+  rename(Total_Tax_amount=`Federal and State Tax per pack`) %>% 
+  rename(State_Tax_amount=`State Tax per pack`)
+
+Taxes <- Taxes %>% 
+  select(State, Avg_Pack_Cost, Consumption, Total_Tax_percent, Total_Tax_amount)
+  
+Tobacco_Use <- Tobacco_Use %>% 
+  rename(State=`Location Description`) %>% 
+  rename(Current_Smokers_All=`Overall`) %>% 
+  rename(Current_Smokers_Male=`Male`) %>% 
+  rename(Current_Smokers_Female=`Female`)
+
+#Filter out territories and non-state entries
+
+Tobacco_Use <- Tobacco_Use %>% 
+  filter(State!="Puerto Rico") %>% 
+  filter(State!="Guam") %>% 
+  filter(State!="National Median (States and DC)") %>% 
+  filter(State!="District of Columbia")
+
+Taxes <- Taxes %>% 
+  filter(State!="District of Columbia")
+
+Lung_Cancer <- Lung_Cancer %>% 
+  filter(State!="Puerto Rico") %>% 
+  filter(State!="District of Columbia")
+
+#Join the Lung_Cancer, State_Income, Taxes, and Tobacco_Use datasets by State
+
+join_1 <- left_join(Taxes, Tobacco_Use, by="State")
+join_2 <- left_join(join_1, Lung_Cancer, by="State")
+Complete_State_Data <- left_join(join_2, State_Income, by="State")
+
+#Add number of smokers variable
+
+Complete_State_Data <- Complete_State_Data %>% 
+  mutate(Numb_Smokers=population*Current_Smokers_All)
+
+#Load US States Polygons Data
+us_states <- us_states() 
+us_states_tidy <- tidy(us_states, region="geoid")
+
+#Load US States Metadata
+us_states_data <- us_states@data
+
+#Join US States Metadata
+us_states_combined <- left_join(us_states_tidy, us_states_data, by=c("id"="geoid"))
+us_states_combined <- us_states_combined %>% 
+  filter(name!="Puerto Rico") %>% 
+  filter(name!="District of Columbia")
+
+#Add Region
+
+
+Complete_State_Data <- Complete_State_Data %>% 
+  mutate(Region = fct_recode(State,
+                             "Pacific" = "Alaska",
+                             "Pacific" = "Hawaii",
+                             "Pacific" = "California",
+                             "Pacific" = "Oregon",
+                             "Pacific" = "Washington",
+                             "Mountain" = "Nevada",
+                             "Mountain" = "Idaho",
+                             "Mountain" = "Montana",
+                             "Mountain" = "Wyoming",
+                             "Mountain" = "Utah",
+                             "Mountain" = "Colorado",
+                             "Mountain" = "Arizona",
+                             "Mountain" = "New Mexico",
+                             "West_North_Central" = "North Dakota",
+                             "West_North_Central" = "South Dakota",
+                             "West_North_Central" = "Nebraska",
+                             "West_North_Central" = "Kansas",
+                             "West_North_Central" = "Minnesota",
+                             "West_North_Central" = "Iowa",
+                             "West_North_Central" = "Missouri",
+                             "West_South_Central" = "Texas",
+                             "West_South_Central" = "Oklahoma",
+                             "West_South_Central" = "Arkansas",
+                             "West_South_Central" = "Louisiana",
+                             "East_North_Central" = "Wisconsin",
+                             "East_North_Central" = "Michigan",
+                             "East_North_Central" = "Illinois",
+                             "East_North_Central" = "Indiana",
+                             "East_North_Central" = "Ohio",
+                             "East_South_Central" = "Kentucky",
+                             "East_South_Central" = "Tennessee",
+                             "East_South_Central" = "Mississippi",
+                             "East_South_Central" = "Alabama",
+                             "Middle_Atlantic" = "New York",
+                             "Middle_Atlantic" = "Pennsylvania",
+                             "Middle_Atlantic" = "New Jersey",
+                             "South_Atlantic" = "Maryland",
+                             "South_Atlantic" = "Delaware",
+                             "South_Atlantic" = "West Virginia",
+                             "South_Atlantic" = "Virginia",
+                             "South_Atlantic" = "North Carolina",
+                             "South_Atlantic" = "South Carolina",
+                             "South_Atlantic" = "Georgia",
+                             "South_Atlantic" = "Florida",
+                             "New_England" = "Vermont",
+                             "New_England" = "New Hampshire",
+                             "New_England" = "Massachusetts",
+                             "New_England" = "Connecticut",
+                             "New_England" = "Rhode Island",
+                             "New_England" = "Maine"
+                             ))
+
+#Join Combined States Data with Complete_State_Data
+Map_Data <- left_join(us_states_combined, Complete_State_Data, by=c("name"="State"))
+
+```
+#3. Data Exploration
+<br>
+
+##Regions
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=Region)) +
+  geom_polygon() +
+  scale_fill_brewer(palette="Set3") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50)) +
+  ggtitle("US Regions")
+```
+<br>
+<br>
+
+##Lung Cancer Death Rate
+```{r, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+
+Lung_Cancer %>% 
+  select(LC_Death_Rate) %>% 
+  summary() %>% 
+  kable()
+
+Lung_Cancer %>% 
+  select(State, LC_Death_Rate) %>% 
+  top_n(5) %>% 
+  arrange(desc(LC_Death_Rate)) %>% 
+  kable()
+
+Lung_Cancer %>% 
+  select(State, LC_Death_Rate) %>% 
+  top_n(-5) %>% 
+  arrange(desc(LC_Death_Rate)) %>% 
+  kable()
+
+Complete_State_Data %>% 
+  group_by(Region) %>% 
+  summarise(Avg_Death_Rate=mean(LC_Death_Rate)) %>% 
+  arrange(desc((Avg_Death_Rate))) %>% 
+  kable()
+
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=LC_Death_Rate)) +
+  geom_polygon() +
+  scale_fill_gradient(low="white", high="darkblue") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50))
+
+```
+Lung Cancer death rate is defined as the number of deaths per 100,000 deaths that are caused by tobacco use. The minimum lung cancer death rate is 15.10 in Utah while the maximum lung cancer death rate is 81.0 in West Virginia. The mean lung cancer death rate is 52.14. Lung cancer death rates are highest in the East and West South Central regions and New England, while death rates are the lowest in the Pacific and Mountain regions. Appart from the three regions with the highest death rates, death rates show a pretty even spread around the nation. Again, Utah's very low death rate is likely associated with the influence of the Mormon church.
+<br>
+<br>
+
+##Percent of Current Smokers
+```{r, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+Tobacco_Use %>% 
+  select(Current_Smokers_All) %>% 
+  summary() %>% 
+  kable()
+
+Tobacco_Use %>% 
+  select(State, Current_Smokers_All) %>% 
+  top_n(5) %>% 
+  arrange(desc(Current_Smokers_All)) %>% 
+  kable()
+
+Tobacco_Use %>% 
+  select(State, Current_Smokers_All) %>% 
+  top_n(-5) %>% 
+  arrange(desc(Current_Smokers_All)) %>% 
+  kable()
+
+Complete_State_Data %>% 
+  group_by(Region) %>% 
+  summarise(Avg_Percent_Smokers=mean(Current_Smokers_All)) %>% 
+  arrange(desc(Avg_Percent_Smokers)) %>% 
+  kable()
+
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=Current_Smokers_All)) +
+  geom_polygon() +
+  scale_fill_gradient(low="white", high="black") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50))
+
+```
+Current smokers is assessed as the percentage of the state population that currently smokes. The minimum percentage of current smokers is 10.30% in Utah while the maximum percentage of smokers is 27.30% in West Virgina. The mean percentage of smokers is 19.32%. Percentages of smokers are lowest in the Pacific, New England, and Mountain regions and highest in the East and West Sough Central regions. It is important to note that Utah's very low smoking rate is likely due to the strong influence of the Mormom church, which explicitly condemns the use of tobacco and alcohol, in the state. 
+<br>
+<br>
+
+##Cigarette Consumption
+```{r, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+
+Taxes %>% 
+  select(Consumption) %>% 
+  summary() %>% 
+  kable()
+
+Taxes %>% 
+  select(State, Consumption) %>% 
+  top_n(5) %>% 
+  arrange(desc(Consumption)) %>% 
+  kable()
+
+Taxes %>% 
+  select(State, Consumption) %>% 
+  top_n(-5) %>% 
+  arrange(desc(Consumption)) %>% 
+  kable()
+
+Complete_State_Data %>% 
+  group_by(Region) %>% 
+  summarise(Avg_Consumption=mean(Consumption)) %>% 
+  arrange(desc((Avg_Consumption))) %>% 
+  kable()
+
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=Consumption)) +
+  geom_polygon() +
+  scale_fill_gradient(low="white", high="darkorange") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50))
+
+```
+Cigarette consumption is defined as per capita cigarette pack sales. The minimum cigarette consumption is 16.6 in New York while the maximum cigarette consumption is 103.1 in West Virginia. The mean cigarette consumption is 49.54. Notably, cigarette consumption displays a wide spread across the states, with a roughly 6-fold difference between the minimum and maximum. Consumption is lowest in the Pacific and Mid-Atlantic regions while it is highest in the East South Central and South Atlantic regions. Consumption conveys smoking prevelance differently than percentage of smokers as it indicates the amount of cigaretts smoked in each state, as opposed to number of smokers. Therefore, this variable can speak to the distribution of heavy versus casual smokers. 
+<br>
+<br>
+
+##Median Household Income
+```{r, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+#State_Income Exploration
+
+State_Income %>% 
+  select(median_hs_income) %>% 
+  summary() %>% 
+  kable()
+
+State_Income %>% 
+  select(State, median_hs_income) %>% 
+  top_n(5) %>% 
+  arrange(desc(median_hs_income)) %>% 
+  kable()
+
+State_Income %>% 
+  select(State, median_hs_income) %>% 
+  top_n(-5) %>% 
+  arrange(desc(median_hs_income)) %>% 
+  kable()
+
+Complete_State_Data %>% 
+  group_by(Region) %>% 
+  summarise(Avg_Income=mean(median_hs_income)) %>% 
+  arrange(desc((Avg_Income))) %>% 
+  kable()
+
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=median_hs_income)) +
+  geom_polygon() +
+  scale_fill_gradient(low="white", high="darkgreen") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50))
+
+```
+Income is assessed as the median household income per state. The minimum median household income is 37,963 in Mississippi while the maximum median household income is 72,483 in Maryland. The mean median household income is 52,884. Median incomes are lowest in the South, namely the East and West South Central regions and highest in the Pacific, Middle Antlantic, and New England. However, as the map shows, a fair amount of regional variability exists with regards to median income. 
+<br>
+<br>
+
+##Tobacco Tax
+```{r, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+Taxes %>% 
+  select(Total_Tax_percent) %>% 
+  summary() %>% 
+  kable
+
+Taxes %>% 
+  select(State, Total_Tax_percent) %>% 
+  top_n(5) %>% 
+  arrange(desc(Total_Tax_percent)) %>% 
+  kable()
+
+Taxes %>% 
+  select(State, Total_Tax_percent) %>% 
+  top_n(-5) %>% 
+  arrange(desc(Total_Tax_percent)) %>% 
+  kable()
+
+Complete_State_Data %>% 
+  group_by(Region) %>% 
+  summarise(Avg_Tax=mean(Total_Tax_percent)) %>% 
+  arrange(desc((Avg_Tax))) %>% 
+  kable()
+
+ggplot(data=Map_Data, aes(x=long, y=lat, group=group, fill=Total_Tax_percent)) +
+  geom_polygon() +
+  scale_fill_gradient(low="white", high="darkred") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50))
+```
+Tobacco tax is assessed as the percentage of the retail price of a cigarette pack that represents state or federal taxes. The minimum tax percentage is 26.50% in Virginia while the maximum tax percentage is 56.9% in Minnesota. The mean tax percentage is 40.24%. Tobacco taxes are lowest in the South, namely the East South Central and South Atlantic regions and highest in New England, with high outliers in Washington and Minnesota. 
+<br>
+<br>
+
+#4. Analysis of Relationships
+##Lung Cancer Death Rate and Current Smokers
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+
+model1 <- lm(formula= LC_Death_Rate ~ Current_Smokers_All, data=Complete_State_Data)
+
+model1data <- broom::augment(model1)
+
+Complete_State_Data <- Complete_State_Data %>% 
+  mutate(state_abbrev=state.abb)
+
+ggplot(Complete_State_Data, aes(x=Current_Smokers_All, y=LC_Death_Rate, label=state_abbrev))+
+  geom_text() +
+  geom_smooth(method="lm", se=FALSE) +
+  xlab("Current Smokers as Percent of State Population") +
+  ylab("Lung Cancer Death Rate")
+
+cor(Complete_State_Data$Current_Smokers_All, Complete_State_Data$LC_Death_Rate)
+
+summary(model1)
+
+
+```
+As one would expect based off medical research dating back to the 1950s, there is a strong positive correlation between the percentage of current smokers in a state and the lung cancer death rate. The correlation coefficient is 0.756. A linear regression found the positive correlation to be siginificant to the 0.1% level.
+
+#Lung Cancer Death Rate and Median Household Income
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+
+model2 <- lm(formula= LC_Death_Rate ~ median_hs_income, data=Complete_State_Data)
+
+model2data <- broom::augment(model2)
+
+ggplot(Complete_State_Data, aes(x=median_hs_income, y=LC_Death_Rate, label=state_abbrev))+
+  geom_text() +
+  geom_smooth(method="lm", se=FALSE) +
+  xlab("Median Household Income") +
+  ylab("Lung Cancer Death Rate")
+
+cor(Complete_State_Data$median_hs_income, Complete_State_Data$LC_Death_Rate)
+
+summary(model2)
+
+```
+There is a strong negative correlation between the median household income and lung cancer death rate. The correlation coefficient is -0.574. A linear regression found the negative correlation to be siginificant to the 0.1% level.
+
+#Lung Cancer Death Rate and Cigarette Consumption
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+model3 <- lm(formula= LC_Death_Rate ~ Consumption, data=Complete_State_Data)
+
+model3data <- broom::augment(model3)
+
+ggplot(Complete_State_Data, aes(x=Consumption, y=LC_Death_Rate, label=state_abbrev))+
+  geom_text() +
+  geom_smooth(method="lm", se=FALSE) +
+  xlab("Cigarette Consumption") +
+  ylab("Lung Cancer Death Rate")
+
+cor(Complete_State_Data$Consumption, Complete_State_Data$LC_Death_Rate)
+
+summary(model3)
+
+```
+As one would assume, there is a strong positive correlation between cigaratte consumption in a state and the lung cancer death rate. The correlation coefficient is 0.665. A linear regression found the positive correlation to be siginificant to the 0.1% level.
+
+#Lung Cancer Death Rate and Tobacco Tax
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+
+model4 <- lm(formula= LC_Death_Rate ~ Total_Tax_percent, data=Complete_State_Data)
+
+model4data <- broom::augment(model4)
+
+ggplot(Complete_State_Data, aes(x=Total_Tax_percent, y=LC_Death_Rate, label=state_abbrev))+
+  geom_text() +
+  geom_smooth(method="lm", se=FALSE) +
+  xlab("Cigarette Tax as Percent of Retail Price") +
+  ylab("Lung Cancer Death Rate")
+
+cor(Complete_State_Data$Total_Tax_percent, Complete_State_Data$LC_Death_Rate)
+
+summary(model4)
+
+```
+There is a small negative correlation between the percent tobacco tax and lung cancer death rate. The correlation coefficient is -0.161. A linear regression found the negative correlation to be siginificant to the 0.1% level. However, the small size of the correlation calls into question the efficacy of the taxes in deterring smokers and reducing the prevelance of lung cancer deaths. 
+
+#Percentage of Current Smokers and Tobacco tax
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+
+model5 <- lm(formula= Current_Smokers_All ~ Total_Tax_percent, data=Complete_State_Data)
+
+model5data <- broom::augment(model5)
+
+ggplot(Complete_State_Data, aes(x=Total_Tax_percent, y=Current_Smokers_All, label=state_abbrev))+
+  geom_text() +
+  geom_smooth(method="lm", se=FALSE) +
+  xlab("Cigarette Tax as Percent of Retail Price") +
+  ylab("Percent Current Smokers")
+
+cor(Complete_State_Data$Total_Tax_percent, Complete_State_Data$Current_Smokers_All)
+
+summary(model5)
+
+```
+There is a negative correlation between tobacco tax and the percentage of current smokers. Notably, the correlation coefficient, -0.494, is much larger than the coefficient between tobacco tax and lung cancer death rate. A linear regression found the negative correlation to be siginificant to the 0.1% level.
+
+#A Closer Look at Lung Cancer and Tobacco tax
+```{r, echo=FALSE, message=TRUE, warning=TRUE, fig.width=8, fig.height=4.5}
+model6 <- lm(formula= LC_Death_Rate ~ Current_Smokers_All + median_hs_income, data=Complete_State_Data)
+
+model6data <- broom::augment(model6)
+
+model6_resdiuals_data <- bind_cols(Complete_State_Data, model3data)
+
+model6_Map_Data <- left_join(us_states_combined, model6_resdiuals_data, by=c("name"="State"))
+
+ggplot(model6_Map_Data, aes(x=Total_Tax_percent, y=.resid, label=state_abbrev))+
+  geom_text() +
+  geom_smooth(method="lm", se=FALSE) +
+  xlab("Total Cigarette Tax as Percent of Pack Price") +
+  ylab("Residuals") +
+  ggtitle("Tax and LC Deaths After Controlling for State Smoking Rates and Income")
+
+cor(model6_resdiuals_data$.resid, Complete_State_Data$Total_Tax_percent)
+
+ggplot(data=model6_Map_Data, aes(x=long, y=lat, group=group, fill=.resid)) +
+  geom_polygon() +
+  scale_fill_gradient(low="blue", high="red") + 
+  geom_path(size=0.1) +
+  coord_map(xlim=c(-130, -65),ylim=c(23,50))
+
+```
+A multivariable regression controlling for both median household income and percentage of smokers--two of the strongest predictor variables for lung cancer death rate--allows us to identify trends in the distribution left unexplained by the those variables. There is a positive correlation of 0.289 between tobacco tax and the residuals left over from the multivariable regression. That is, as cigarette tax goes up, the residual associated with that state becomes more positive, indicating that the state's lung caner death rate is higher than would be predicted by median income and precentage of smokers alone. This result appears counterintuitive at first, but is ultimately expected. The positive correlation  indicates that independent of income or precentage of smokers, there is no longer a negative correlation between lung cancer death rates and tobacco tax. As evidenced by the strong negative correlation between tobacco tax and percentage of smokers, tobacco taxes likely contribute to lower lung cancer death rates by detering people from smoking. 
+
+
+#Concluions
+
+My investigation of 2013 smoking data suggests the existence of strong regional trends in smoking prevalence, regulations, and outcomes across the United States. The southern regions, namely South Atlantic, East South Central and West South Central showed the strongest regional correlations between variables. For example, the southern regions have the lowest cigarette taxes and median household incomes while they have the highest smoking and lung cancer death rates.  
+
+As one would expect, lung cancer death rates correlate positively and strongly with current percentage of smokers and cigarette consumption. These relationships support the proven causal relationship between tobacco consumption and lung cancer. Meanwhile, lung cancer death rates corretly negatively with median household income, suggesting that, generally, smoking remains more prevelant in lower income states. While there is a negative correlation between lung cancer death rate and cigarette tax, which could suggest the efficacy of such taxes, the correlation is very small. Upon controlling for median income and number of smokers, the negative correlation reverses, resulting in a positive correlation between the regression residuals and tobacco tax. This result indicates that independent of income and percentage of smokers, tobacco taxes do not correlate with lower lung cancer death rates. 
+
+Further exploration into the relationship between anti-tobacco regulations and adverse health outcomes should track the changes in outcomes over time, paying special attention to the few years after the implementation of new anti-tobacco regulations or changes in tobacco taxes. Moreover, one can analyze the breakdown of smoking prevelance across different demographic groups in order gain deeper insights into the possible imacts of tobacco regulations.
+
+Ultimately, my findings indicate that there is much more work to be done in the fight against smoking in the United States. Smoking rates remain as high as 27% in some states and lung cancer death rates as high as 69. Public health groups should target the regions with the highest smoking prevelance, namely the south, and try to better understand the links between certain demographic factors and smoking behaviors in those areas in order to create efficient yet effective anti-smoking campaigns. 
+
+#Data sets
+
+[CDC Tax Burden on Tobacco](https://chronicdata.cdc.gov/Policy/The-Tax-Burden-on-Tobacco-Volume-49-1970-2014/7nwe-3aj9/data)
+<br>
+[CDC Tobacco Use](https://chronicdata.cdc.gov/Survey-Data/Behavioral-Risk-Factor-Data-Tobacco-Use-2011-to-pr/wsas-xwh5)
+<br>
+[Social Explorer Lung Cancer](http://www.socialexplorer.com/tables/CDC2013/R11306754)
+<br>
+[Social Explorer Income and Population](http://www.socialexplorer.com/tables/ACS2013/R11306776)
+<br>
+
+#Other Sources
+
+[BBC 1957: Smoking 'causes lung cancer'](http://news.bbc.co.uk/onthisday/hi/dates/stories/june/27/newsid_2956000/2956618.stm)
+
+[CDC History of the Surgeon General's Reports on Smoking and Health](https://www.cdc.gov/tobacco/data_statistics/sgr/history/)
+
+[NIH Lung Cancer Fact Sheet](http://www.lung.org/lung-health-and-diseases/lung-disease-lookup/lung-cancer/learn-about-lung-cancer/lung-cancer-fact-sheet.html)
